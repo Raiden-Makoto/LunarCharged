@@ -10,3 +10,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
+
+# debug files
+debug.py
