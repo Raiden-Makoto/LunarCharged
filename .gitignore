@@ -3,3 +3,10 @@ MOF_ASR
 *.pt
 *.csv
 *.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
