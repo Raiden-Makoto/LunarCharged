@@ -28,7 +28,7 @@ def is_biocompatible(structure):
             return True
     return False
 
-def main():
+def preprocess():
     if not os.path.exists(TARGET_DIR):
         os.makedirs(TARGET_DIR)
 
@@ -63,4 +63,4 @@ def main():
     print(f"Data ready in: {TARGET_DIR}")
 
 if __name__ == "__main__":
-    main()
+    preprocess()
