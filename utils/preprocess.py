@@ -6,8 +6,8 @@ from pymatgen.core import Structure #type: ignore
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURATION ---
-SOURCE_DIR = "MOF_ASR"  # The folder you unzipped
-TARGET_DIR = "biomedical_mofs"     # Where safe MOFs will go
+SOURCE_DIR = None  # The folder you unzipped (was: "MOF_ASR")
+TARGET_DIR = None  # Where safe MOFs will go (was: "biomedical_mofs")
 SAFE_METALS = {"Fe", "Zn", "Zr", "Mg", "Ca", "Ti"}
 # We also allow organic elements (C, H, O, N) and common halogens/non-metals (F, Cl, P, S, Br, I)
 ALLOWED_NON_METALS = {"C", "H", "O", "N", "F", "Cl", "P", "S", "Br", "I"}

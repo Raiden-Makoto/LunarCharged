@@ -6,7 +6,7 @@ from pymatgen.core import Structure #type: ignore
 from tqdm import tqdm #type: ignore
 
 # --- CONFIG ---
-INPUT_DIR = "biomedical_mofs"
+INPUT_DIR = None  # (was: "biomedical_mofs")
 OUTPUT_DIR = "processed_graphs"
 # We still filter massive ones to save GPU memory later
 MAX_ATOMS = 150
