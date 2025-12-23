@@ -37,6 +37,18 @@ class CrystalEncoder(nn.Module):
         dist_sq = torch.sum(diff**2, dim=-1)
         dist = torch.sqrt(dist_sq + 1e-6) # Add epsilon to avoid NaN at 0
         
+        # --- DEBUG INSERTION ---
+        if torch.rand(1).item() < 0.01: # Print only 1% of the time to avoid spam
+            print(f"\n--- DEBUG DIAGNOSTICS ---")
+            print(f"Distances (Min/Mean/Max): {dist.min().item():.2f} / {dist.mean().item():.2f} / {dist.max().item():.2f}")
+            
+            # Check RBF activation
+            rbf_vals = self.rbf(dist)
+            print(f"RBF Activations (Mean): {rbf_vals.mean().item():.4f}")
+            if rbf_vals.mean().item() < 1e-4:
+                print("⚠️ CRITICAL WARNING: RBF Layer is dead (zeros). Atoms are disconnected.")
+        # -----------------------
+        
         # 3. Expand Distances (RBF)
         rbf_edges = self.rbf(dist) # (B, N, N, 40)
         
