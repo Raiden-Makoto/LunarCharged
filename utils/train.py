@@ -24,14 +24,14 @@ CHECKPOINT_DIR = "checkpoints"
 BATCH_SIZE = 16        # Safe for 10GB Unified Memory
 GRAD_ACCUM_STEPS = 8   # Accumulate gradients over 8 batches (effective batch size = 16 * 8 = 128)
 LR = 1e-3              # Learning Rate
-EPOCHS = 50           # Total passes through data
+EPOCHS = 150           # Total passes through data
 KL_WEIGHT = 1.0       # Weight for KL Divergence (keeps latent space neat)
 GRAD_CLIP = 1.0        # Prevents exploding gradients
 
 # Model Architecture
-HIDDEN_DIM = 64
+HIDDEN_DIM = 128
 LATENT_DIM = 64
-NUM_LAYERS = 2
+NUM_LAYERS = 3
 TIMESTEPS = 1000
 
 def train():
