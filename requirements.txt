@@ -228,7 +228,7 @@ tomli
 torch
 torch-geometric==2.7.0
 tornado==6.5.4
-tqdm==4.66.1
+tqdm==4.66.3
 traitlets
 typer==0.20.0
 typer-slim==0.20.0
