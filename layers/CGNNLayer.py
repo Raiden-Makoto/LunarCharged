@@ -6,7 +6,7 @@ class CGNNLayer(nn.Module):
     """
     GNN Layer that accepts Latent Code (z) and Time (t) conditioning.
     """
-    def __init__(self, hidden_dim, rbf_bins=60):
+    def __init__(self, hidden_dim, rbf_bins=32):
         super().__init__()
         # Input size is larger because we concat (Node + Neighbor + Edge + z + t)
         input_dim = (hidden_dim * 2) + rbf_bins + hidden_dim + hidden_dim 

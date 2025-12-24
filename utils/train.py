@@ -11,7 +11,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from utils.dataloader import get_dataloader, MOFDataset, collate_mols
+from utils.dataloader import BatteryDataset, collate_mols
 from torch.utils.data import DataLoader, random_split #type: ignore
 from model.cdvae import CrystalDiffusionVAE
 
@@ -47,13 +47,13 @@ def train():
 
     # 2. Load Data and Split (80% train, 20% test - but we only use train)
     # 'processed_graphs' is the folder created by process_mofs_atomic
-    full_dataset = MOFDataset("processed_graphs")
+    full_dataset = BatteryDataset("data/battery_materials.pkl")
     total_size = len(full_dataset)
     train_size = int(0.8 * total_size)
     test_size = total_size - train_size
     
     # Split dataset
-    train_dataset, test_dataset = random_split(
+    train_dataset, _ = random_split(
         full_dataset, 
         [train_size, test_size],
         generator=torch.Generator().manual_seed(42)  # For reproducibility

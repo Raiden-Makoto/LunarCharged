@@ -5,7 +5,7 @@ from layers.RBFExpansion import RBFExpansion
 from layers.CGNNLayer import CGNNLayer
 
 class DenoisingDecoder(nn.Module):
-    def __init__(self, hidden_dim=128, latent_dim=64, num_layers=3, use_checkpoint=False, rbf_bins=60, rbf_vmin=0, rbf_vmax=30):
+    def __init__(self, hidden_dim=128, latent_dim=64, num_layers=3, use_checkpoint=False, rbf_bins=32, rbf_vmin=0, rbf_vmax=8.0):
         super().__init__()
         
         # Embeddings

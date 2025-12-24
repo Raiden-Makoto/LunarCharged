@@ -6,7 +6,7 @@ from model.encoder import CrystalEncoder
 from model.decoder import DenoisingDecoder
 
 class CrystalDiffusionVAE(nn.Module):
-    def __init__(self, hidden_dim=128, latent_dim=64, num_layers=3, num_timesteps=1000, use_checkpoint=True, rbf_bins=60, rbf_vmin=0, rbf_vmax=30):
+    def __init__(self, hidden_dim=128, latent_dim=64, num_layers=3, num_timesteps=1000, use_checkpoint=True, rbf_bins=32, rbf_vmin=0, rbf_vmax=8.0):
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.encoder = CrystalEncoder(hidden_dim, latent_dim, num_layers, use_checkpoint=False, rbf_bins=rbf_bins, rbf_vmin=rbf_vmin, rbf_vmax=rbf_vmax)
