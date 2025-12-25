@@ -14,6 +14,55 @@ if parent_dir not in sys.path:
 # --- IMPORTS ---
 from model.cdvae import CrystalDiffusionVAE
 
+# --- HELPER: REPULSION FORCE ---
+def apply_repulsion(coords, lattice, threshold=1.5, strength=0.1):
+    """
+    Detects overlapping atoms and pushes them apart.
+    
+    Args:
+        coords: (Batch, N, 3) Fractional coordinates
+        lattice: (Batch, 3, 3) Cartesian lattice matrix
+        threshold: Distance threshold in Angstroms (default: 1.5)
+        strength: Repulsion strength (default: 0.1)
+    
+    Returns:
+        frac_update: (Batch, N, 3) Fractional coordinate update to apply
+    """
+    # 1. Convert to Cartesian for distance check
+    # (B, N, 3)
+    cart_coords = torch.bmm(coords, lattice)
+    
+    # 2. Calculate pairwise vectors (Simple N^2 loop is fine for evaluation)
+    B, N, _ = cart_coords.shape
+    diff = cart_coords.unsqueeze(2) - cart_coords.unsqueeze(1)  # (B, N, N, 3)
+    
+    # Periodic Boundary Handling (The "Pac-Man" wraparound)
+    # If using fractional, we'd wrap. Since we are in Cartesian but generated 
+    # inside a lattice, we should ideally check periodic images.
+    # For a quick fix, let's trust the "Cluster" is central and just check direct distances.
+    
+    dist_sq = torch.sum(diff**2, dim=-1)
+    dist = torch.sqrt(dist_sq + 1e-6)
+    
+    # 3. Create Repulsion Force
+    # If dist < threshold, apply force. Otherwise 0.
+    # Force direction = diff / dist (Unit vector)
+    # Force magnitude = (threshold - dist) * strength
+    
+    mask = (dist < threshold) & (dist > 0.01)  # Don't push self (dist=0)
+    
+    # Vector pointing AWAY from the neighbor
+    force_dir = diff / (dist.unsqueeze(-1) + 1e-6)
+    force_mag = (threshold - dist).unsqueeze(-1) * strength
+    
+    total_force = torch.sum(force_dir * force_mag * mask.unsqueeze(-1), dim=2)
+    
+    # 4. Convert Force back to Fractional updates
+    inv_lattice = torch.linalg.inv(lattice)
+    frac_update = torch.bmm(total_force, inv_lattice)
+    
+    return frac_update
+
 # --- CONFIGURATION ---
 # MUST match your training settings exactly
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -101,18 +150,22 @@ def generate(checkpoint_epoch=None):
     num_samples = 5
     print(f"Generating {num_samples} crystal candidates...")
     
-    # We need a template for the lattice and atom counts.
-    # In a real conditional generation, you'd sample these.
-    # For now, we manually define a "Battery-like" box.
-    
-    # Example: Li7La3Zr2O12 (LLZO) is ~12-13 Angstroms
-    # Let's try a smaller cubic box for stability: 10x10x10 Angstroms
-    # With ~20 atoms
-    dummy_lattice = torch.eye(3).unsqueeze(0).to(DEVICE) * 10.0  # 10 Angstrom Cube
-    dummy_lattice = dummy_lattice.repeat(num_samples, 1, 1)  # Batch of lattices
-    
     # Random atom counts (e.g. 20 atoms)
     num_atoms = 20
+    
+    # Calculate lattice size based on target density
+    # OLD: 10.0 Angstroms (Too big, creates "Soup")
+    # NEW: Calculate based on Density
+    # Solid State Battery density is roughly 0.07 - 0.1 atoms/A^3
+    target_density = 0.08  # atoms per cubic Angstrom
+    vol_per_atom = 1.0 / target_density
+    total_vol = num_atoms * vol_per_atom
+    box_len = total_vol ** (1/3)  # Cube root
+    
+    print(f"Calculated Box Length: {box_len:.2f} Angstroms (Target Density: {target_density} atoms/A³)")
+    
+    dummy_lattice = torch.eye(3).unsqueeze(0).to(DEVICE) * box_len
+    dummy_lattice = dummy_lattice.repeat(num_samples, 1, 1)  # Batch of lattices
     atom_types = torch.randint(1, 10, (num_samples, num_atoms), device=DEVICE)  # Random types (1-9, avoid 0)
     mask = torch.ones((num_samples, num_atoms), dtype=torch.bool, device=DEVICE)
     
@@ -124,7 +177,7 @@ def generate(checkpoint_epoch=None):
     # Note: Model expects fractional coordinates in [-0.5, 0.5] range (centered at zero)
     curr_frac_coords = torch.rand(num_samples, num_atoms, 3, device=DEVICE) - 0.5
     
-    print("Denoising...")
+    print("Denoising with Physics Guidance...")
     for t in tqdm(reversed(range(NUM_TIMESTEPS)), desc="Denoising"):
         t_batch = torch.full((num_samples,), t, device=DEVICE, dtype=torch.long)
         
@@ -181,6 +234,22 @@ def generate(checkpoint_epoch=None):
         curr_frac_coords = curr_frac_coords - torch.round(curr_frac_coords)
         # Apply mask
         curr_frac_coords = curr_frac_coords * mask_3d
+        
+        # --- THE FIX: PHYSICS CORRECTION ---
+        # Before moving to the next step, fix the overlaps!
+        # We run a mini-simulation (5 steps) to untangle atoms
+        for _ in range(5):
+            repulsion_push = apply_repulsion(
+                curr_frac_coords, 
+                dummy_lattice, 
+                threshold=1.5,   # Push anything closer than 1.5 Angstroms
+                strength=0.05    # Gentle nudges
+            )
+            curr_frac_coords = curr_frac_coords + repulsion_push
+            curr_frac_coords = curr_frac_coords % 1.0  # Wrap periodic boundaries
+            # Apply mask to ensure padding atoms don't move
+            curr_frac_coords = curr_frac_coords * mask_3d
+        # -----------------------------------
 
     # 5. Save Results
     print(f"Saving to {OUTPUT_DIR}...")
