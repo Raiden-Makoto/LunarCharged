@@ -1,190 +1,201 @@
 import torch
-import torch.nn as nn
 import numpy as np
 import os
 import sys
 from tqdm import tqdm
-from pymatgen.core import Structure, Lattice, Element
+from pymatgen.core import Structure, Lattice
+from pymatgen.io.cif import CifWriter
 
-# Add parent directory to path so we can import from utils and model
+# Add parent directory to path
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-# Import your model
+# --- IMPORTS ---
 from model.cdvae import CrystalDiffusionVAE
-from utils.dataloader import get_dataloader
 
-# --- CONFIG ---
-CHECKPOINT_PATH = "checkpoints/cdvae_epoch_50.pt"  # Or your latest checkpoint
-OUTPUT_DIR = "generated_mofs"
-NUM_SAMPLES = 5
+# --- CONFIGURATION ---
+# MUST match your training settings exactly
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+CHECKPOINT_DIR = "checkpoints"
+OUTPUT_DIR = "generated_batteries"
 
-# Model Config (Must match training!)
+# Model Hyperparameters (Must match train.py)
 HIDDEN_DIM = 128
 LATENT_DIM = 64
-NUM_LAYERS = 2
-TIMESTEPS = 1000
+NUM_LAYERS = 3
+NUM_TIMESTEPS = 1000
 
-def inverse_diffusion(model, atom_types, shape, lattice, mask, z, device):
+# --- HELPER: POST-PROCESSING ---
+def tensor_to_structure(atom_types, frac_coords, lattice_matrix):
     """
-    The Reverse Process: Starts from pure noise and removes it step-by-step.
+    Converts model outputs back to a Pymatgen Structure.
     """
-    # 1. Start with pure Gaussian noise (x_T)
-    x = torch.randn(shape, device=device)
+    # 1. Map atom types (0, 1, 2...) back to elements
+    # You need the same mapping from your dataset!
+    # For batteries, common elements: Li, O, P, S, La, Zr...
+    # If you lost the mapping, we can guess or use a dummy map.
+    # ideally load 'atom_mapping.pkl' if you saved it.
     
-    # Apply mask to keep padding zero
-    mask_3d = mask.unsqueeze(-1).float()
-    x = x * mask_3d
+    # For now, let's assume a generic mapping or use placeholders if unknown
+    # This is just for visualization
+    known_elements = [
+        "Li", "O", "P", "S", "La", "Zr", "Ti", "Al", "Ge", "Si", 
+        "Co", "Ni", "Mn", "Fe", "Cu", "Zn"
+    ]
     
-    # 2. Reverse Loop (T -> 0)
-    for t in tqdm(reversed(range(0, model.num_timesteps)), desc="Sampling", total=model.num_timesteps):
-        # Create time tensor (batch of 't')
-        t_batch = torch.full((shape[0],), t, device=device, dtype=torch.long)
-        
-        # Predict the noise using the model
-        pred_noise, _ = model.decoder(
-            atom_types,
-            x, lattice, mask, t_batch, z
-        )
-        
-        # 3. Math: Remove the noise (DDPM reverse process)
-        # Get alpha values
-        alpha_t = model.alphas_cumprod[t]
-        alpha_t_prev = model.alphas_cumprod[t-1] if t > 0 else torch.tensor(1.0, device=device)
-        
-        # Compute beta_t (noise schedule)
-        beta_t = 1 - (alpha_t / alpha_t_prev)
-        
-        # Predict x_0 from x_t and predicted noise
-        sqrt_recip_alpha_t = 1.0 / torch.sqrt(alpha_t)
-        sqrt_one_minus_alpha_t = torch.sqrt(1.0 - alpha_t)
-        pred_x0 = sqrt_recip_alpha_t * (x - sqrt_one_minus_alpha_t * pred_noise)
-        
-        # Compute coefficients for x_{t-1}
-        pred_coeff1 = torch.sqrt(alpha_t_prev) * beta_t / (1.0 - alpha_t)
-        pred_coeff2 = torch.sqrt(1.0 - beta_t) * (1.0 - alpha_t_prev) / (1.0 - alpha_t)
-        
-        # Sample x_{t-1}
-        if t > 0:
-            noise = torch.randn_like(x)
-            posterior_variance = beta_t * (1.0 - alpha_t_prev) / (1.0 - alpha_t)
-            x = pred_coeff1 * pred_x0 + pred_coeff2 * x + torch.sqrt(posterior_variance) * noise
+    species = []
+    for t in atom_types:
+        idx = int(t.item())
+        if idx < len(known_elements):
+            species.append(known_elements[idx])
         else:
-            x = pred_x0
-            
-        # Re-mask to keep geometry clean
-        x = x * mask_3d
-    
-    return x
+            species.append("X") # Unknown placeholder
 
-def save_cif(frac_coords, atom_types, lattice, filename):
+    # 2. Create Lattice
+    # lattice_matrix is (3, 3)
+    l = Lattice(lattice_matrix.cpu().numpy())
+    
+    # 3. Create Structure
+    coords = frac_coords.cpu().numpy()
+    return Structure(l, species, coords)
+
+# --- GENERATION LOOP ---
+@torch.no_grad()
+def generate(checkpoint_epoch=None):
     """
-    Converts tensors back to a .cif file
+    Generate crystal structures using the trained model.
+    
     Args:
-        frac_coords: (N, 3) fractional coordinates tensor
-        atom_types: (N,) atomic numbers tensor
-        lattice: (3, 3) lattice matrix tensor
+        checkpoint_epoch: Which epoch checkpoint to load (e.g., 10, 20, etc.)
+                          If None, loads the latest checkpoint.
     """
-    # Convert to numpy
-    frac_coords_np = frac_coords.cpu().numpy()
-    atom_types_np = atom_types.cpu().numpy()
-    lattice_np = lattice.cpu().numpy()
-    
-    # Filter out padding (0)
-    valid_indices = atom_types_np > 0
-    if not valid_indices.any():
-        print(f"   Skipped {filename}: No valid atoms")
-        return
-        
-    clean_types = atom_types_np[valid_indices]
-    clean_frac_coords = frac_coords_np[valid_indices]
-    
-    # Convert Atomic Numbers to Symbols
-    species = [Element.from_Z(int(z)) for z in clean_types]
-    
-    # Create Pymatgen Structure (takes fractional coords)
-    struct = Structure(Lattice(lattice_np), species, clean_frac_coords, coords_are_cartesian=False)
-    
-    # Save
-    struct.to(filename=filename, fmt="cif")
-    print(f"   Saved: {filename}")
-
-def evaluate():
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-    
-    # Check if checkpoint exists
-    if not os.path.exists(CHECKPOINT_PATH):
-        print(f"❌ Checkpoint not found: {CHECKPOINT_PATH}")
-        print("   Available checkpoints:")
-        if os.path.exists("checkpoints"):
-            for f in os.listdir("checkpoints"):
-                if f.endswith(".pt"):
-                    print(f"     - checkpoints/{f}")
-        return
-        
-    print(f"Loading Model from {CHECKPOINT_PATH}...")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     # 1. Load Model
+    if checkpoint_epoch is None:
+        # Find latest checkpoint
+        checkpoint_files = [f for f in os.listdir(CHECKPOINT_DIR) if f.startswith("cdvae_epoch_") and f.endswith(".pt")]
+        if not checkpoint_files:
+            raise FileNotFoundError(f"No checkpoints found in {CHECKPOINT_DIR}")
+        # Extract epoch numbers and find max
+        epochs = [int(f.split("_")[2].split(".")[0]) for f in checkpoint_files]
+        checkpoint_epoch = max(epochs)
+    
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, f"cdvae_epoch_{checkpoint_epoch}.pt")
+    print(f"Loading model from {checkpoint_path}...")
+    
     model = CrystalDiffusionVAE(
-        hidden_dim=HIDDEN_DIM, 
-        latent_dim=LATENT_DIM, 
+        hidden_dim=HIDDEN_DIM,
+        latent_dim=LATENT_DIM,
         num_layers=NUM_LAYERS,
-        num_timesteps=TIMESTEPS,
-        use_checkpoint=False  # Disable checkpointing for inference
+        num_timesteps=NUM_TIMESTEPS,
+        use_checkpoint=False
     ).to(DEVICE)
     
-    try:
-        checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"   ✓ Model loaded (epoch {checkpoint.get('epoch', 'unknown')})")
-    except Exception as e:
-        print(f"   ❌ Error loading checkpoint: {e}")
-        return
-    
+    checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
+    model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
-    # 2. Get Templates (Lattices + Atom Counts)
-    # We use real data shapes as containers for our new generated crystals
-    data_dir = "processed_graphs"
-    if not os.path.exists(data_dir):
-        print(f"❌ Data directory not found: {data_dir}")
-        return
-        
-    loader = get_dataloader(data_dir, batch_size=NUM_SAMPLES, shuffle=True)
-    if len(loader.dataset) == 0:
-        print(f"❌ No data files found in {data_dir}")
-        return
-        
-    batch = next(iter(loader))
+    # 2. Setup Generation
+    num_samples = 5
+    print(f"Generating {num_samples} crystal candidates...")
     
-    atom_types = batch['atom_types'].to(DEVICE)
-    lattice = batch['lattice'].to(DEVICE)
-    mask = batch['mask'].to(DEVICE)
+    # We need a template for the lattice and atom counts.
+    # In a real conditional generation, you'd sample these.
+    # For now, we manually define a "Battery-like" box.
     
-    print(f"Generating {NUM_SAMPLES} new structures...")
+    # Example: Li7La3Zr2O12 (LLZO) is ~12-13 Angstroms
+    # Let's try a smaller cubic box for stability: 10x10x10 Angstroms
+    # With ~20 atoms
+    dummy_lattice = torch.eye(3).unsqueeze(0).to(DEVICE) * 10.0  # 10 Angstrom Cube
+    dummy_lattice = dummy_lattice.repeat(num_samples, 1, 1)  # Batch of lattices
     
-    with torch.no_grad():
-        # A. Sample Random Latent Vector (z)
-        # "Dream" a new blueprint
-        z = torch.randn(NUM_SAMPLES, LATENT_DIM).to(DEVICE)
+    # Random atom counts (e.g. 20 atoms)
+    num_atoms = 20
+    atom_types = torch.randint(1, 10, (num_samples, num_atoms), device=DEVICE)  # Random types (1-9, avoid 0)
+    mask = torch.ones((num_samples, num_atoms), dtype=torch.bool, device=DEVICE)
+    
+    # 3. Sample Latent Space (z) - random latent vectors
+    z = torch.randn(num_samples, LATENT_DIM, device=DEVICE)
+    
+    # 4. Start Reverse Diffusion (Denoising)
+    # Start with Pure Gaussian Noise for coordinates
+    # Note: Model expects fractional coordinates in [-0.5, 0.5] range (centered at zero)
+    curr_frac_coords = torch.rand(num_samples, num_atoms, 3, device=DEVICE) - 0.5
+    
+    print("Denoising...")
+    for t in tqdm(reversed(range(NUM_TIMESTEPS)), desc="Denoising"):
+        t_batch = torch.full((num_samples,), t, device=DEVICE, dtype=torch.long)
         
-        # B. Run Inverse Diffusion
-        # We reuse the atom_types from the template for now (Rearrangement Task)
-        # This asks the model: "Find a STABLE configuration for these atoms."
-        shape = batch['frac_coords'].shape
-        generated_coords = inverse_diffusion(model, atom_types, shape, lattice, mask, z, DEVICE)
+        # Generate time embedding
+        t_emb = model.time_embedding(t_batch.float())
         
-        # C. Save Outputs
-        for i in range(NUM_SAMPLES):
-            filename = os.path.join(OUTPUT_DIR, f"gen_mof_{i}.cif")
-            # Shift coordinates back from [-0.5, 0.5] to [0, 1] for CIF file format
-            coords_for_cif = generated_coords[i] + 0.5
-            save_cif(coords_for_cif, atom_types[i], lattice[i], filename)
+        # Predict Noise (Epsilon) in Cartesian (Angstroms)
+        pred_noise_cart, _ = model.decoder(
+            atom_types, 
+            curr_frac_coords, 
+            dummy_lattice, 
+            mask, 
+            t_emb, 
+            z
+        )
+        
+        # --- DDPM SAMPLER MATH ---
+        # Get diffusion schedule values from model buffers
+        alpha_bar_t = model.alphas_cumprod[t]  # Tensor scalar
+        alpha_bar_t_prev = model.alphas_cumprod[t - 1] if t > 0 else torch.tensor(1.0, device=DEVICE)
+        
+        # Calculate alpha_t (not stored directly, derive from alpha_bar)
+        alpha_t = alpha_bar_t / alpha_bar_t_prev if t > 0 else alpha_bar_t
+        beta_t = 1.0 - alpha_t
+        
+        # Convert predicted noise from Cartesian to Fractional for the update step
+        # (Inverse of: cart = frac @ lattice) -> frac = cart @ inv_lattice
+        inv_lattice = torch.linalg.inv(dummy_lattice)  # (B, 3, 3)
+        pred_noise_frac = torch.bmm(pred_noise_cart, inv_lattice)  # (B, N, 3)
+        
+        # Apply mask
+        mask_3d = mask.unsqueeze(-1).float()
+        pred_noise_frac = pred_noise_frac * mask_3d
+        
+        # Update x_{t-1} using DDPM sampling formula
+        # x_{t-1} = (1/sqrt(alpha_t)) * (x_t - (beta_t/sqrt(1-alpha_bar_t)) * epsilon)
+        sqrt_alpha_t = torch.sqrt(alpha_t)
+        sqrt_one_minus_alpha_bar_t = torch.sqrt(1.0 - alpha_bar_t)
+        
+        coeff = beta_t / sqrt_one_minus_alpha_bar_t
+        mean = (1.0 / sqrt_alpha_t) * (curr_frac_coords - coeff * pred_noise_frac)
+        
+        # Add noise (except for last step t=0)
+        if t > 0:
+            # Posterior variance: beta_tilde = beta_t * (1 - alpha_bar_{t-1}) / (1 - alpha_bar_t)
+            posterior_variance = beta_t * (1.0 - alpha_bar_t_prev) / (1.0 - alpha_bar_t)
+            sigma = torch.sqrt(posterior_variance)
+            noise = torch.randn_like(curr_frac_coords)
+            curr_frac_coords = mean + sigma * noise
+        else:
+            curr_frac_coords = mean
+        
+        # Wrap to [-0.5, 0.5] range (Periodic Boundary)
+        curr_frac_coords = curr_frac_coords - torch.round(curr_frac_coords)
+        # Apply mask
+        curr_frac_coords = curr_frac_coords * mask_3d
 
-    print(f"\n✅ Generation Complete. Check the '{OUTPUT_DIR}' folder.")
+    # 5. Save Results
+    print(f"Saving to {OUTPUT_DIR}...")
+    for i in range(num_samples):
+        try:
+            struct = tensor_to_structure(atom_types[i], curr_frac_coords[i], dummy_lattice[i])
+            filepath = os.path.join(OUTPUT_DIR, f"battery_{i}.cif")
+            CifWriter(struct).write_file(filepath)
+            print(f"  Saved {filepath}")
+        except Exception as e:
+            print(f"  Failed to save sample {i}: {e}")
 
 if __name__ == "__main__":
-    evaluate()
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate crystal structures")
+    parser.add_argument("--epoch", type=int, default=None, help="Checkpoint epoch to load (default: latest)")
+    args = parser.parse_args()
+    generate(checkpoint_epoch=args.epoch)
