@@ -3,7 +3,7 @@
 
 **Date:** December 24, 2025
 **Experiment:** 1
-**Status:** Success (Metastable Phase Discovered)
+**Status:**  Metastable Phase Discovered
 
 ## 1. Experiment Summary
 This project successfully trained a generative Equivariant Graph Neural Network (EGNN) to design novel solid-state battery materials from scratch. The model, trained on a dataset of stable crystals, learned to generate chemically valid structures from pure random noise.
@@ -53,7 +53,6 @@ A percolation analysis was performed to test for ion transport pathways:
 ## 4. Conclusion
 The model successfully hallucinated a non-existent, chemically valid, and functionally conductive material structure. The result—a metastable, superionic $Li_3PS_4$ polymorph—validates the use of EGNN-based diffusion models for accelerating materials discovery.
 
-## 5. Next Steps
-1. Swap Lithium with Sodium
-2. Chlorine Doping - see if the model figures out where to put the Chlorine atoms
-3. Random ahh combos and pray for a miracle
+**Date:** December 25, 2025
+**Experiment:** 2
+**Status:**  Catastrophic Failure. No more experiments.
